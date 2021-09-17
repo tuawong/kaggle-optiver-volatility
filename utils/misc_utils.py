@@ -75,7 +75,7 @@ def load_parquet_files(
 
 
 
-############################### Calculations ################################
+############################### Misc Calculations ################################
 def log_return(list_stock_prices):
     log_return = np.log(list_stock_prices).diff() 
     return log_return
@@ -89,3 +89,22 @@ def realized_volatility(series_log_return):
 def fullrange(series):
     return series.max() - series.min()
 
+
+
+############################### For LightGBM Custom Scorer ################################
+def rmspe_obj(
+    prediction,
+    train
+    ):
+    y = train.get_label()
+    grad = -2*(y-prediction)/(y**2)
+    hess = 2/(y**2)
+    return grad, hess
+
+def rmspe_eval(
+    prediction,
+    train
+    ):
+    y = train.get_label()
+    rmspe =  (np.sqrt(np.mean(np.square((y - prediction) / y))))
+    return 'rmspe', rmspe, False

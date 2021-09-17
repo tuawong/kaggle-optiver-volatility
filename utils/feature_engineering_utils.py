@@ -91,14 +91,14 @@ def full_feature_engineering(
     trade_aggregation: dict = trade_aggregation,
     time_agg_book: dict = time_agg_book,
     time_agg_trade: dict = time_agg_trade,
-    train: bool =True, 
+    training: bool =True, 
     lower_seconds_cutoff: int = 0,
     upper_seconds_cutoff: int = 600
     ): 
     processed_stock_data_list = []
     
     for stock_id in tqdm(stock_ids):
-        if train:
+        if training:
             book = load_parquet_file(str(DATA_DIR)+ f'/book_train.parquet/stock_id={stock_id}')
             trade = load_parquet_file(str(DATA_DIR)+ f'/trade_train.parquet/stock_id={stock_id}')
 
@@ -135,23 +135,23 @@ def full_feature_engineering(
 
     processed_stock_data = processed_stock_data.merge(time_agg, on='time_id', how='left').merge(stock_agg, on='stock_id', how='left')
         
-    if train:
+    if training:
         processed_stock_data =  training_target.merge(processed_stock_data, on=['id', 'stock_id', 'time_id'], how='left')
 
     return processed_stock_data
 
 
 
-def full_feature_engineering_by_cutoff(cutoffs, train=True, **kwargs):
+def full_feature_engineering_by_cutoff(cutoffs, training=True, **kwargs):
     dataset_list = [] 
 
     for cutoff in cutoffs: 
         fe_data = full_feature_engineering(
             **kwargs,
-            train = train,
+            training = training,
             lower_seconds_cutoff=cutoff[0], 
             upper_seconds_cutoff=cutoff[1])
-        if train:
+        if training:
             fe_data.set_index(['id', 'time_id', 'stock_id', 'target'], inplace=True)
         else:
             fe_data.set_index(['id', 'time_id', 'stock_id'], inplace=True)
@@ -161,5 +161,5 @@ def full_feature_engineering_by_cutoff(cutoffs, train=True, **kwargs):
         dataset_list.append(fe_data)
 
     final_data_set = pd.concat(dataset_list, axis=1)
-    return final_data_set.reset_index(), dataset_list
+    return final_data_set.reset_index()
 

@@ -5,6 +5,8 @@ import joblib
 import os
 from tqdm import tqdm
 import pathlib
+from joblib import Parallel, delayed
+
 from utils.misc_utils import fullrange, realized_volatility, log_return, get_stock_path, load_parquet_file, load_parquet_files, load_train_test
 
 competition = 'optiver-realized-volatility-prediction'
@@ -19,18 +21,21 @@ training_target, test = load_train_test()
 book_aggregation = {
     'wap1': [np.mean, np.std, fullrange], 
     'wap2': [np.mean, np.std, fullrange], 
+    'wap_gap': [np.mean, np.std, fullrange], 
     'log_return_1': [fullrange, np.sum, np.mean, realized_volatility], 
     'log_return_2': [fullrange, np.sum, np.mean, realized_volatility], 
-    'bid_ask_price_spread_1': [np.mean, np.std, fullrange],
-    'bid_ask_price_spread_2': [np.mean, np.std, fullrange],
-    'bid_ask_size_spread_1': [np.mean, np.std, fullrange],
-    'bid_ask_size_spread_2': [np.mean, np.std, fullrange]
+    'log_return_gap': [fullrange, np.sum, np.mean, realized_volatility], 
+    'bid_ask_price_spread_1': [np.mean, np.std, fullrange, realized_volatility],
+    'bid_ask_price_spread_2': [np.mean, np.std, fullrange, realized_volatility],
+    'bid_ask_size_spread_1': [np.mean, np.std, fullrange, realized_volatility],
+    'bid_ask_size_spread_2': [np.mean, np.std, fullrange, realized_volatility]
     }
 
 trade_aggregation = {
     'volume': [np.mean, np.sum, np.std], 
     'price': [np.mean, np.std], 
-    'order_count': [np.mean, np.sum, np.std]
+    'order_count': [np.mean, np.sum, np.std],
+    'trade_return': [fullrange, np.sum, np.mean, realized_volatility]
     }
 
 time_agg_trade = {
@@ -42,8 +47,10 @@ time_agg_trade = {
 time_agg_book = {
     'wap1_std': [np.mean], 
     'wap2_std': [np.mean], 
+    'wap_gap_std': [np.mean], 
     'log_return_1_realized_volatility': [np.mean], 
     'log_return_2_realized_volatility': [np.mean], 
+    'log_return_gap_realized_volatility': [np.mean], 
     'log_return_1_sum': [np.mean], 
     'log_return_2_sum': [np.mean] 
     }
@@ -57,8 +64,10 @@ stock_agg_trade = {
 stock_agg_book = {
     'wap1_std': [np.std], 
     'wap2_std': [np.std], 
+    'wap_gap_std': [np.std], 
     'log_return_1_realized_volatility': [np.std], 
     'log_return_2_realized_volatility': [np.std], 
+    'log_return_gap_realized_volatility': [np.std], 
     'log_return_1_sum': [np.std], 
     'log_return_2_sum': [np.std] 
     }
@@ -66,8 +75,10 @@ stock_agg_book = {
 def generate_features_book_data(df):
     df['wap1'] = (df['bid_price1'] * df['ask_size1'] +  df['ask_price1'] * df['bid_size1']) / (df['bid_size1']+ df['ask_size1'])
     df['wap2'] = (df['bid_price2'] * df['ask_size2'] +  df['ask_price2'] * df['bid_size2']) / (df['bid_size2']+ df['ask_size2'])
+    df['wap_gap'] = np.abs(df['wap1'] -  df['wap2'])
     df['log_return_1'] = log_return(df['wap1']).fillna(0)
     df['log_return_2'] = log_return(df['wap2']).fillna(0)
+    df['log_return_gap'] =  np.abs(df['log_return_1'] -  df['log_return_2'])
     df['bid_ask_price_spread_1'] = df['ask_price1'] - df['bid_price1']
     df['bid_ask_price_spread_2'] = df['ask_price2'] - df['bid_price2']
     df['bid_ask_size_spread_1'] = df['ask_size1'] - df['bid_size1']
@@ -76,6 +87,7 @@ def generate_features_book_data(df):
 
 def generate_features_trade_data(df):
     df['volume'] = df['price'] * df['size']
+    df['trade_return'] = log_return(df['price']).fillna(0)
     return df
 
 
@@ -97,7 +109,8 @@ def full_feature_engineering(
     ): 
     processed_stock_data_list = []
     
-    for stock_id in tqdm(stock_ids):
+
+    def individual_stock_process(stock_id):
         if training:
             book = load_parquet_file(str(DATA_DIR)+ f'/book_train.parquet/stock_id={stock_id}')
             trade = load_parquet_file(str(DATA_DIR)+ f'/trade_train.parquet/stock_id={stock_id}')
@@ -120,9 +133,9 @@ def full_feature_engineering(
         merged_df = agg_book_data.merge(agg_trade_data, left_index=True, right_index=True, how='left').fillna(0).reset_index()
         merged_df['stock_id'] = merged_df['id'].apply(lambda x: int(x.split('-')[0]))
         merged_df['time_id'] = merged_df['id'].apply(lambda x: int(x.split('-')[1]))
-        
-        processed_stock_data_list.append(merged_df)
-
+        return merged_df
+    
+    processed_stock_data_list = Parallel(n_jobs=8)(delayed(individual_stock_process)(stock_id) for stock_id  in tqdm(stock_ids))
     processed_stock_data = pd.concat(processed_stock_data_list)
 
     time_agg_trade_data = groupby_and_aggregate(processed_stock_data, agg_col = 'time_id', agg_dict=time_agg_trade, suffix='_period')

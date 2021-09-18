@@ -13,7 +13,7 @@ from utils.logging_utils import create_logger
 rmspe_scorer = make_scorer(rmspe, greater_is_better=False)
 logger = create_logger(export_log=False)
 
-def optiver_train_and_log_experiment(run_name, cutoffs):
+def optiver_train_and_log_experiment(run_name, cutoffs, lofo_threshold):
     #mlflow.set_tracking_uri("https://localhost:1111")
     logger.info(f'...Currently Running {run_name}...')
 
@@ -31,9 +31,6 @@ def optiver_train_and_log_experiment(run_name, cutoffs):
         training=True)
 
     mlflow.log_param('Cutoffs', cutoffs)
-    mlflow.log_param('Train Dataset Row/Columns', final_training_data.shape)
-    mlflow.log_param('Test Dataset Row/Columns', final_training_data.shape)
-
 
     ########################Initial Model Training########################
     logger.info('...Currently Training First LGBM...')
@@ -50,6 +47,10 @@ def optiver_train_and_log_experiment(run_name, cutoffs):
                                             y_train,
                                             test_size=0.1
                                             )
+    
+    mlflow.log_param('Columns', X_train.columns)
+    mlflow.log_param('Train Dataset Row/Columns', X_train.shape)
+    mlflow.log_param('Test Dataset Row/Columns', X_valid.shape)
 
     train_data = lgb.Dataset(X_train, label=y_train)
     valid_data = lgb.Dataset(X_valid, label=y_valid)
@@ -67,6 +68,7 @@ def optiver_train_and_log_experiment(run_name, cutoffs):
                         num_boost_round=50000,
                         early_stopping_rounds=200)
 
+    mlflow.log_metric('Train Score Full Model', rmspe(y_train, model.predict(X_train)))
     mlflow.log_metric('Test Score Full Model', rmspe(y_test, model.predict(X_test)))
 
     ########################LOFO Feature Selection#######################
@@ -81,14 +83,13 @@ def optiver_train_and_log_experiment(run_name, cutoffs):
     dataset = Dataset(df=sample_df, target="target", features=[col for col in sample_df.columns if col != 'target'])
     lofo_imp = LOFOImportance(dataset, cv=cv, scoring=rmspe_scorer)
     importance_df = lofo_imp.get_importance()
-    selected_lofo_features = importance_df.loc[importance_df.importance_mean>0.001]['feature'].to_list()
+    selected_lofo_features = importance_df.loc[importance_df.importance_mean>lofo_threshold]['feature'].to_list()
 
-    mlflow.log_param('Feature Importance DF', importance_df)
+    mlflow.log_param('LOFO Importance Selection Threshold', lofo_threshold)
     mlflow.log_param('LOFO Selected Features', selected_lofo_features)
 
     ########################Final Model Training#######################
     logger.info('...Currently Training Final Model...\n')
-    selected_lofo_features = importance_df.loc[importance_df.importance_mean>0.001]['feature'].to_list()
     X_train_lofo, X_test_lofo, y_train_lofo, y_test_lofo = train_test_split(
                                             final_training_data.drop('target', axis=1)[selected_lofo_features],
                                             final_training_data['target'],
@@ -118,5 +119,6 @@ def optiver_train_and_log_experiment(run_name, cutoffs):
                         early_stopping_rounds=200)
 
 
+    mlflow.log_metric('Train Score Feature-Selected Model', rmspe(y_train_lofo, model.predict(X_train_lofo)))
     mlflow.log_metric('Test Score Feature-Selected Model', rmspe(y_test_lofo, model.predict(X_test_lofo)))
     mlflow.end_run()

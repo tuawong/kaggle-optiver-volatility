@@ -49,15 +49,16 @@ def optiver_train_and_log_experiment(
     train_id = train.stock_id.unique()
     test_id = test.stock_id.unique()
     
-    logger.info('...Currently Feature Engineering...')
     file_path = OUT_DIR/f'final_preprocessed_data_{time_cutoffs}.pkl'
     if from_scratch:
+        logger.info('...Currently Feature Engineering From Scratch...')
         final_preprocessed_data = full_feature_engineering_by_cutoff(
             cutoffs = time_cutoffs,
             stock_ids = train_id,
             training=True)
         final_preprocessed_data.to_pickle(file_path)
     else: 
+        logger.info('...Currently Loading Feature Engineered Data...')
         final_preprocessed_data = pd.read_pickle(file_path)
     
     mlflow.log_param('Cutoffs', time_cutoffs)
@@ -190,7 +191,6 @@ def optiver_train_and_log_experiment(
                             num_boost_round=50000,
                             early_stopping_rounds=200
                             )
-
 
     mlflow.log_param('LGMB Hyperparameter', parameters)
     mlflow.log_metric('Train Score Feature-Selected Model', rmspe(y_train, model_final.predict(X_train_lofo)))

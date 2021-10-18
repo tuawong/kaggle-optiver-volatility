@@ -8,14 +8,16 @@ import pathlib
 from joblib import Parallel, delayed
 
 from utils.misc_utils import fullrange, realized_volatility, log_return, get_stock_path, load_parquet_file, load_parquet_files, load_train_test
+from utils.clustering_utils import train_and_dump_clusters
 
 competition = 'optiver-realized-volatility-prediction'
 DATA_DIR = pathlib.Path.cwd()/'data/input'
 OUT_DIR = pathlib.Path.cwd()/'data/output'
 
 training_target, test = load_train_test()
+
 ##########################################################################################
-################################## Feature Engineering ##################################
+##################################### Feature Dict #######################################
 ##########################################################################################
 
 book_aggregation = {
@@ -72,6 +74,10 @@ stock_agg_book = {
     'log_return_2_sum': [np.std] 
     }
 
+##########################################################################################
+##################################### Utils Function #####################################
+##########################################################################################
+
 def generate_features_book_data(df):
     df['wap1'] = (df['bid_price1'] * df['ask_size1'] +  df['ask_price1'] * df['bid_size1']) / (df['bid_size1']+ df['ask_size1'])
     df['wap2'] = (df['bid_price2'] * df['ask_size2'] +  df['ask_price2'] * df['bid_size2']) / (df['bid_size2']+ df['ask_size2'])
@@ -96,6 +102,11 @@ def groupby_and_aggregate(df, agg_col, agg_dict, suffix=''):
     agg_df.columns = [col[0] + '_' + col[1] + suffix for col in agg_df.columns]
     return agg_df
 
+
+##########################################################################################
+##################################### Full Feature Eng Pipeline ##########################
+##########################################################################################
+
 def full_feature_engineering(
     stock_ids: list = [],
     training_target: pd.DataFrame = training_target, 
@@ -103,7 +114,8 @@ def full_feature_engineering(
     trade_aggregation: dict = trade_aggregation,
     time_agg_book: dict = time_agg_book,
     time_agg_trade: dict = time_agg_trade,
-    training: bool =True, 
+    training: bool = True, 
+    summarize_by_cluster: bool = True, 
     lower_seconds_cutoff: int = 0,
     upper_seconds_cutoff: int = 600
     ): 
@@ -142,12 +154,40 @@ def full_feature_engineering(
     time_agg_book_data = groupby_and_aggregate(processed_stock_data, agg_col = 'time_id', agg_dict=time_agg_book, suffix='_period')
     time_agg = time_agg_book_data.merge(time_agg_trade_data, left_index=True, right_index=True).reset_index()
 
+    if summarize_by_cluster:
+        clustered_df_list = []
+        cluster_result_path = OUT_DIR/'clusters/cluster_result.pkl'
+
+        if not cluster_result_path.is_file():
+            train_and_dump_clusters()
+            
+        cluster_results = pd.read_pickle(cluster_result_path)
+        processed_stock_data['clusters'] = processed_stock_data.stock_id.map(cluster_results)
+        for cluster in set(cluster_results.values()):
+            df_by_cluster = processed_stock_data.loc[processed_stock_data.clusters==cluster]
+            #cluster_agg_trade_data = groupby_and_aggregate(df_by_cluster, agg_col = 'time_id', agg_dict=time_agg_trade, suffix=f'_period_cluster_{cluster}')
+            #cluster_agg_book_data = groupby_and_aggregate(df_by_cluster, agg_col = 'time_id', agg_dict=time_agg_book, suffix=f'_period_cluster_{cluster}')
+            
+            cluster_agg_trade_data = groupby_and_aggregate(df_by_cluster, agg_col = 'time_id', agg_dict=time_agg_trade, suffix=f'_period_cluster')
+            cluster_agg_book_data = groupby_and_aggregate(df_by_cluster, agg_col = 'time_id', agg_dict=time_agg_book, suffix=f'_period_cluster')
+            cluster_agg = cluster_agg_book_data.merge(cluster_agg_trade_data, left_index=True, right_index=True)
+            cluster_agg['clusters'] = cluster
+            clustered_df_list.append(cluster_agg)
+        
+        clustered_df = pd.concat(clustered_df_list, axis=0).reset_index()
+        #clustered_df = pd.concat(clustered_df_list, axis=1).reset_index()
+        #time_agg = time_agg.merge(clustered_df, on = 'time_id', how='left')
+    
     stock_agg_trade_data = groupby_and_aggregate(processed_stock_data, agg_col = 'stock_id', agg_dict=stock_agg_trade, suffix='_stock')
     stock_agg_book_data = groupby_and_aggregate(processed_stock_data, agg_col = 'stock_id', agg_dict=stock_agg_book, suffix='_stock')
     stock_agg = stock_agg_book_data.merge(stock_agg_trade_data, left_index=True, right_index=True).reset_index()
 
     processed_stock_data = processed_stock_data.merge(time_agg, on='time_id', how='left').merge(stock_agg, on='stock_id', how='left')
-        
+    
+    if summarize_by_cluster:
+        processed_stock_data['clusters'] = processed_stock_data.stock_id.map(cluster_results)
+        processed_stock_data = processed_stock_data.merge(clustered_df, on = ['time_id', 'clusters'], how='left').drop('clusters', axis=1)
+
     if training:
         processed_stock_data =  training_target.merge(processed_stock_data, on=['id', 'stock_id', 'time_id'], how='left')
 
@@ -155,7 +195,11 @@ def full_feature_engineering(
 
 
 
-def full_feature_engineering_by_cutoff(cutoffs, training=True, **kwargs):
+def full_feature_engineering_by_cutoff(
+    cutoffs: list = [(0, 300), (300, 600)],
+    training: bool = True, 
+    **kwargs
+    ):
     dataset_list = [] 
 
     for cutoff in cutoffs: 

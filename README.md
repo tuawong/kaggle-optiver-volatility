@@ -7,6 +7,7 @@ The objective is to develop a model to predict the level of volatility in stock 
 * `notebook runner.ipynb`: contains run instances of the training pipeline
 * `utils`: folder contains all the helper functions for the training pipeline
 * `01_data_preprocessing` and `02_model_training`: contains breakdown of training pipeline for debugging and development purpose
+* `requirements.txt`: contains packages necessary to reproduce the result
 
 ### Training Pipeline
 The training pipeline takes in `time_cutoffs` argument to bin and aggregate each 600 seconds input time period into input features. The training pipeline are constructed as followed:
